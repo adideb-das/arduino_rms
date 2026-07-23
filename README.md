@@ -6,7 +6,7 @@ by two cascaded 74HC595 shift registers. A browser page built on the Web Serial
 API displays the same data live and lets you change the sensitivity without
 opening the Arduino IDE.
 
-![Assembled meter: Arduino Uno, KY-038 microphone module, two 74HC595s and a ten-segment bar graph on breadboard](setup_b.jpg)
+![Assembled meter: Arduino Uno, KY-038 microphone module, two 74HC595s and a ten-segment bar graph on breadboard](setup_b.jpeg)
 
 ## What it does
 
