@@ -1,0 +1,325 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>RMS Sound Meter serial monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c2530;
+    --edge: #2a3441; --edge2: #3a4757;
+    --ink: #e6edf3; --dim: #8b98a5; --faint: #5a6673;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --live: #3fb950; --quiet: #d29922; --dead: #f85149; --idle: #6e7681;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--mono); font-size: 14px; line-height: 1.5;
+    padding: 20px; max-width: 860px; margin-inline: auto;
+  }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .04em; margin: 0 0 2px; }
+  .sub { color: var(--faint); font-size: 12px; margin-bottom: 18px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: stretch; }
+  .card {
+    background: var(--panel); border: 1px solid var(--edge);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .grow { flex: 1 1 260px; }
+
+  button {
+    font-family: var(--mono); font-size: 13px; color: var(--ink);
+    background: var(--panel2); border: 1px solid var(--edge2);
+    border-radius: 6px; padding: 8px 14px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: #4d6082; background: #22303f; }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: #1f6feb22; border-color: #2b5c9e; color: #cfe3ff; }
+
+  /* connection bar */
+  #bar { align-items: center; margin-bottom: 16px; }
+  .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--idle); display: inline-block; }
+  .status-dot.on { background: var(--live); }
+  #statustext { color: var(--dim); font-size: 12px; }
+
+  /* LED bar mirrors the physical 10-segment display */
+  #ledwrap { display: flex; flex-direction: column; gap: 10px; }
+  #leds { display: flex; gap: 5px; }
+  .led {
+    flex: 1; height: 46px; border-radius: 4px;
+    background: #10161d; border: 1px solid #222c37;
+    transition: background .04s linear;
+  }
+  .led.on { background: var(--live); border-color: var(--live); box-shadow: 0 0 8px #3fb95066; }
+  .led.on.warn { background: var(--quiet); border-color: var(--quiet); box-shadow: 0 0 8px #d2992266; }
+  .led.peak { background: transparent; border-color: #e6edf3; box-shadow: inset 0 0 0 2px #e6edf3; }
+  .ledscale { display: flex; justify-content: space-between; color: var(--faint); font-size: 11px; }
+
+  /* numeric readouts */
+  .readouts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .metric { background: var(--panel2); border: 1px solid var(--edge); border-radius: 6px; padding: 10px 12px; }
+  .metric .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .metric .val { font-size: 22px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .metric .unit { color: var(--faint); font-size: 12px; font-weight: 400; }
+
+  /* health tag */
+  #health { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; }
+  #healthdot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
+  #health.live #healthdot { background: var(--live); } #health.live { color: var(--live); }
+  #health.quiet #healthdot { background: var(--quiet); } #health.quiet { color: var(--quiet); }
+  #health.dead #healthdot { background: var(--dead); } #health.dead { color: var(--dead); }
+
+  /* sensitivity */
+  #sens { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #fsval { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 64px; }
+  #sens .hint { color: var(--faint); font-size: 11px; }
+
+  /* raw pane */
+  #rawhead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  #raw {
+    height: 180px; overflow: auto; background: #0a0e13; border: 1px solid var(--edge);
+    border-radius: 6px; padding: 8px 10px; font-size: 12px; color: #b3c0cd;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  #raw .echo { color: #8fb8ff; }
+  .section-label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+  .warn-box { background: #d2992218; border: 1px solid #6b551a; color: #e3c079; border-radius: 6px; padding: 10px 12px; font-size: 12px; margin-bottom: 16px; }
+</style>
+
+<h1>RMS SOUND METER · SERIAL MONITOR</h1>
+<div class="sub">Reads the RMS/peak debug stream · sends sensitivity commands · 115200 baud</div>
+
+<div id="unsupported" class="warn-box" style="display:none">
+  This browser has no Web Serial API. 
+</div>
+
+<div class="row card" id="bar">
+  <button id="connect" class="primary">Connect</button>
+  <button id="disconnect" disabled>Disconnect</button>
+  <span class="status-dot" id="statusdot"></span>
+  <span id="statustext">Not connected</span>
+  <span style="flex:1"></span>
+  <span id="health"><span id="healthdot"></span><span id="healthtext">—</span></span>
+</div>
+
+<div class="row" style="margin-bottom:14px">
+  <div class="card grow" id="ledwrap">
+    <div class="section-label">Level (mirrors 10-LED bar)</div>
+    <div id="leds"></div>
+    <div class="ledscale"><span>1</span><span>quiet</span><span>10 · clip</span></div>
+  </div>
+</div>
+
+<div class="row" style="margin-bottom:14px">
+  <div class="card grow">
+    <div class="section-label">Readouts</div>
+    <div class="readouts">
+      <div class="metric"><div class="label">RMS</div><div class="val" id="m-rms">—</div></div>
+      <div class="metric"><div class="label">Peak</div><div class="val" id="m-peak">—</div></div>
+      <div class="metric"><div class="label">LEDs</div><div class="val" id="m-leds">—</div></div>
+      <div class="metric"><div class="label">DC bias</div><div class="val" id="m-dc">—</div></div>
+      <div class="metric"><div class="label">Raw pk-pk</div><div class="val" id="m-pkpk">—</div></div>
+      <div class="metric"><div class="label">sensitivity</div><div class="val" id="m-fs">—</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="row" style="margin-bottom:14px">
+  <div class="card grow">
+    <div class="section-label">Sensitivity</div>
+    <div id="sens">
+      <button id="more" disabled>More sensitive</button>
+      <button id="less" disabled>Less sensitive</button>
+      <span>sensitivity <span id="fsval">—</span></span>
+      <span class="hint">lower = more sensitive · steps of 10 · reported by the device</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div id="rawhead">
+    <div class="section-label" style="margin:0">Raw serial (ground truth — before parsing)</div>
+    <button id="clearraw">Clear</button>
+  </div>
+  <div id="raw"></div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const NUM_LEDS = 10;
+
+  let port = null, reader = null, writer = null, readableClosed = null, keepReading = false;
+
+  // ---- build LED segments ----
+  const ledEls = [];
+  const ledsBox = $('leds');
+  for (let i = 0; i < NUM_LEDS; i++) {
+    const d = document.createElement('div');
+    d.className = 'led';
+    ledsBox.appendChild(d);
+    ledEls.push(d);
+  }
+
+  // ---- Web Serial availability ----
+  if (!('serial' in navigator)) {
+    $('unsupported').style.display = 'block';
+    $('connect').disabled = true;
+  }
+
+  // ---- parsing: tolerant regexes against the human-readable line ----
+  // sensitivity uses [:=] so it matches BOTH the 250ms debug line ("sensitivity: 120")
+  // AND the instant echo the firmware prints on every +/- ("sensitivity = 120").
+  const RE = {
+    rms:  /RMS:\s*(-?[\d.]+)/,
+    fs:   /sensitivity\s*[:=]\s*(\d+)/,
+    leds: /LEDs:\s*(\d+)/,
+    peak: /peak:\s*(-?[\d.]+)/,
+    dc:   /dc:\s*(\d+)/,
+    pkpk: /raw pk-pk:\s*(\d+)/,
+    tag:  /\[([^\]]+)\]/,
+  };
+
+  const state = { rms:null, fs:null, leds:null, peak:null, dc:null, pkpk:null, health:null, warn:false };
+
+  function parseLine(line) {
+    let m, touched = false;
+    if ((m = RE.rms.exec(line)))  { state.rms  = parseFloat(m[1]); touched = true; }
+    if ((m = RE.fs.exec(line)))   { state.fs   = parseInt(m[1]);   touched = true; }
+    if ((m = RE.leds.exec(line))) { state.leds = parseInt(m[1]);   touched = true; }
+    if ((m = RE.peak.exec(line))) { state.peak = parseFloat(m[1]); touched = true; }
+    if ((m = RE.dc.exec(line)))   { state.dc   = parseInt(m[1]);   touched = true; }
+    if ((m = RE.pkpk.exec(line))) { state.pkpk = parseInt(m[1]);   touched = true; }
+    if ((m = RE.tag.exec(line)))  {
+      const t = m[1].toLowerCase();
+      if (t.includes('dead'))       { state.health = 'dead';  state.warn = true; }
+      else if (t.includes('quiet')) { state.health = 'quiet'; state.warn = true; }
+      else if (t.includes('alive')) { state.health = 'live';  state.warn = false; }
+      touched = true;
+    }
+    if (touched) render();
+  }
+
+  // ---- rendering ----
+  function fmt(v, dp) { return v == null ? '—' : (dp != null ? v.toFixed(dp) : String(v)); }
+
+  function render() {
+    $('m-rms').textContent  = fmt(state.rms, 1);
+    $('m-peak').textContent = fmt(state.peak, 1);
+    $('m-leds').textContent = fmt(state.leds);
+    $('m-dc').textContent   = fmt(state.dc);
+    $('m-pkpk').textContent = fmt(state.pkpk);
+    $('m-fs').textContent   = fmt(state.fs);
+    $('fsval').textContent  = fmt(state.fs);
+
+    const lit = state.leds == null ? 0 : state.leds;
+    const peakIdx = state.peak == null ? -1 : Math.round(state.peak); // 1..10
+    for (let i = 0; i < NUM_LEDS; i++) {
+      const el = ledEls[i];
+      const on = (i + 1) <= lit;
+      const isPeak = (i + 1) === peakIdx && !on;
+      el.className = 'led'
+        + (on ? ' on' : '')
+        + (on && state.warn ? ' warn' : '')
+        + (isPeak ? ' peak' : '');
+    }
+
+    const h = $('health');
+    h.className = state.health || '';
+    $('healthtext').textContent =
+      state.health === 'live' ? 'signal alive' :
+      state.health === 'quiet' ? 'quiet' :
+      state.health === 'dead' ? 'mic dead? A0 flat' : '—';
+  }
+
+  // ---- raw pane ----
+  const rawBox = $('raw');
+  function pushRaw(line) {
+    const div = document.createElement('div');
+    if (/sensitivity\s*=/.test(line)) div.className = 'echo';
+    div.textContent = line;
+    rawBox.appendChild(div);
+    while (rawBox.childNodes.length > 400) rawBox.removeChild(rawBox.firstChild);
+    rawBox.scrollTop = rawBox.scrollHeight;
+  }
+  $('clearraw').onclick = () => { rawBox.textContent = ''; };
+
+  // ---- connection ----
+  function setConnected(on) {
+    $('statusdot').classList.toggle('on', on);
+    $('statustext').textContent = on ? 'Connected · 115200' : 'Not connected';
+    $('connect').disabled = on;
+    $('disconnect').disabled = !on;
+    $('more').disabled = !on;
+    $('less').disabled = !on;
+  }
+
+  async function connect() {
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+    } catch (e) {
+      $('statustext').textContent = 'Connect cancelled or failed';
+      return;
+    }
+    // Opening toggles DTR, which resets most Arduino boards — the sketch reruns
+    // setup() and sensitivity returns to its default. The display self-corrects
+    // because every value shown here comes from the incoming stream, not local state.
+    setConnected(true);
+
+    const decoder = new TextDecoderStream();
+    readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
+    reader = decoder.readable.getReader();
+    writer = port.writable.getWriter();
+    keepReading = true;
+    readLoop();
+  }
+
+  async function readLoop() {
+    let tail = '';
+    try {
+      while (keepReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        tail += value;
+        // Chunks split mid-line and coalesce lines — split on \n, keep the remainder.
+        let nl;
+        while ((nl = tail.indexOf('\n')) >= 0) {
+          const line = tail.slice(0, nl).replace(/\r$/, '');
+          tail = tail.slice(nl + 1);
+          if (line.length) { pushRaw(line); parseLine(line); }
+        }
+      }
+    } catch (e) {
+      // read error (device unplugged) — fall through to teardown
+    }
+    await teardown();
+  }
+
+  async function send(ch) {
+    if (!writer) return;
+    try { await writer.write(new TextEncoder().encode(ch)); }
+    catch (e) { pushRaw('[write failed — device gone?]'); }
+  }
+
+  async function teardown() {
+    keepReading = false;
+    try { if (reader) { await reader.cancel(); reader.releaseLock(); } } catch {}
+    try { if (readableClosed) await readableClosed; } catch {}
+    try { if (writer) { writer.releaseLock(); } } catch {}
+    try { if (port) await port.close(); } catch {}
+    reader = writer = readableClosed = port = null;
+    setConnected(false);
+  }
+
+  $('connect').onclick = connect;
+  $('disconnect').onclick = teardown;
+  $('more').onclick = () => send('+'); // more sensitive → firmware LOWERS sensitivity
+  $('less').onclick = () => send('-'); // less sensitive → firmware RAISES sensitivity
+
+  if (navigator.serial) {
+    navigator.serial.addEventListener('disconnect', () => { if (port) teardown(); });
+  }
+
+  render();
+})();
+</script>
